@@ -15,15 +15,16 @@ from dotenv import load_dotenv
 
 load_dotenv()  # загружает .env в os.environ
 
-IMAP_SERVER   = os.getenv('IMAP_SERVER')
-EMAIL_FOLDER  = os.getenv('EMAIL_FOLDER')
-EXCEL_FILE    = os.getenv('EXCEL_FILE')
+IMAP_SERVER = os.getenv('IMAP_SERVER')
+EMAIL_FOLDER = os.getenv('EMAIL_FOLDER')
+EXCEL_FILE = os.getenv('EXCEL_FILE')
 EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_KEY = os.getenv('EMAIL_KEY')
 
 # ────────────────────────────────────────────────
 #          Вспомогательные функции
 # ────────────────────────────────────────────────
+
 
 def decode_subject(subject):
     if not subject:
@@ -35,35 +36,52 @@ def decode_subject(subject):
                 decoded += part.decode(encoding or 'utf-8', errors='replace')
             else:
                 decoded += str(part)
-        except:
+        except Exception as e:
             decoded += str(part)
+            print(e)
+
     return decoded.strip()
+
 
 def get_html_part(msg):
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == 'text/html':
                 charset = part.get_content_charset() or 'utf-8'
-                return part.get_payload(decode=True).decode(charset, errors='ignore')
+                payload = part.get_payload(decode=True)
+                return payload.decode(charset, errors='ignore')
+
     elif msg.get_content_type() == 'text/html':
         charset = msg.get_content_charset() or 'utf-8'
-        return msg.get_payload(decode=True).decode(charset, errors='ignore')
+        payload = msg.get_payload(decode=True)
+        return payload.decode(charset, errors='ignore')
+
     return None
 
+
 def extract_datetime_from_text(text):
-    m = re.search(r'(\d{2}\.\d{2}\.\d{4})\s+(\d{2}:\d{2})', text)
-    if m:
+    meta = re.search(r'(\d{2}\.\d{2}\.\d{4})\s+(\d{2}:\d{2})', text)
+    if meta:
         try:
-            return datetime.strptime(f"{m.group(1)} {m.group(2)}", "%d.%m.%Y %H:%M")
-        except:
-            pass
-    m2 = re.search(r'(\d{2}\.\d{2}\.\d{4})', text)
-    if m2:
+            return datetime.strptime(
+                f"{meta.group(1)} {meta.group(2)}",
+                "%d.%m.%Y %H:%M"
+            )
+        except Exception as e:
+            print(e)
+
+    meta = re.search(r'(\d{2}\.\d{2}\.\d{4})', text)
+    if meta:
         try:
-            return datetime.strptime(m2.group(1), "%d.%m.%Y")
-        except:
-            pass
+            return datetime.strptime(
+                meta.group(1),
+                "%d.%m.%Y"
+            )
+        except Exception as e:
+            print(e)
+
     return None
+
 
 def parse_receipt_items(html_text):
     soup = BeautifulSoup(html_text, 'html.parser')
@@ -80,6 +98,7 @@ def parse_receipt_items(html_text):
             tds = row.find_all(['td', 'th'])
             if not tds:
                 continue
+
             texts = [td.get_text(strip=True) for td in tds]
 
             if 'Наименование' in texts:
@@ -91,12 +110,15 @@ def parse_receipt_items(html_text):
                             break
 
                         name = texts[index + 1]
-                        price_str = texts[index + 2].replace(' ', '').replace(',', '.')
-                        qty_str  = texts[index + 3].replace(' ', '')
-                        sum_str  = texts[index + 4].replace(' ', '').replace(',', '.')
+                        price_str = texts[index + 2].replace(' ', '')
+                        price_str = price_str.replace(',', '.')
+
+                        qty_str = texts[index + 3].replace(' ', '')
+                        sum_str = texts[index + 4].replace(' ', '')
+                        sum_str = sum_str.replace(',', '.')
 
                         price = float(price_str)
-                        qty   = int(qty_str)
+                        qty = int(qty_str)
                         total = float(sum_str)
 
                         if price is not None and qty is not None:
@@ -110,8 +132,10 @@ def parse_receipt_items(html_text):
                         num += 1
                         index = texts.index(f'{num}.')
 
-                except:
+                except Exception as e:
+                    print(e)
                     break
+
                 break
 
     return items, dt
@@ -120,8 +144,9 @@ def parse_receipt_items(html_text):
 #                   Основная логика
 # ────────────────────────────────────────────────
 
+
 def main():
-    print("Парсер электронных чеков от 1-ofd.ru (Яндекс Почта)\n")
+    print("Парсер электронных чеков от 1-ofd.ru\n")
 
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
@@ -168,7 +193,7 @@ def main():
                 continue
 
             date_str = receipt_dt.strftime('%d.%m.%Y') if receipt_dt else ''
-            time_str = receipt_dt.strftime('%H:%M')    if receipt_dt else ''
+            time_str = receipt_dt.strftime('%H:%M') if receipt_dt else ''
 
             for item in items:
                 all_rows.append({
@@ -183,7 +208,9 @@ def main():
                 })
 
             mark = '✓' if items else '–'
-            print(f"[{idx:3d}/{len(msg_ids)}] {mark}  {subject[:60]}{'...' if len(subject)>60 else ''}")
+            length = len(msg_ids)
+            postfix = '...' if len(subject) > 60 else ''
+            print(f"[{idx:3d}/{length}] {mark}  {subject[:60]}{postfix}")
 
         except Exception as e:
             print(f"[{idx:3d}] Ошибка: {str(e)[:80]}")
@@ -197,10 +224,22 @@ def main():
     df = pd.DataFrame(all_rows)
 
     if 'Дата' in df.columns and 'Время' in df.columns:
-        df['sort_dt'] = pd.to_datetime(df['Дата'] + ' ' + df['Время'], format='%d.%m.%Y %H:%M', errors='coerce')
-        df = df.sort_values(['sort_dt']).drop(columns=['sort_dt']).reset_index(drop=True)
+        df['sort_dt'] = pd.to_datetime(
+            df['Дата'] + ' ' + df['Время'],
+            format='%d.%m.%Y %H:%M',
+            errors='coerce'
+        )
+        df = df.sort_values(['sort_dt'])
+        df = df.drop(columns=['sort_dt'])
+        df = df.reset_index(drop=True)
 
-    final_columns = ['Наименование', 'Количество', 'Цена за шт', 'Сумма', 'Название письма']
+    final_columns = [
+        'Наименование',
+        'Количество',
+        'Цена за шт',
+        'Сумма',
+        'Название письма'
+    ]
     existing_cols = [c for c in final_columns if c in df.columns]
     df_final = df[existing_cols]
 
@@ -211,6 +250,7 @@ def main():
         print(f"Уникальных чеков: {df['Название письма'].nunique()}")
     except Exception as e:
         print(f"Ошибка сохранения Excel: {e}")
+
 
 if __name__ == '__main__':
     main()
