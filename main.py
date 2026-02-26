@@ -133,7 +133,6 @@ def parse_receipt_items(html_text):
                         index = texts.index(f'{num}.')
 
                 except Exception as e:
-                    print(e)
                     break
 
                 break
@@ -179,7 +178,8 @@ def main():
             msg = email.message_from_bytes(raw_email)
 
             subject = decode_subject(msg['Subject'])
-            sender = parseaddr(msg['From'])[1]
+            subject_parts = subject.split(' ')
+            sender = ' '.join(subject_parts[:-2])
 
             html = get_html_part(msg)
             if not html:
@@ -197,14 +197,14 @@ def main():
 
             for item in items:
                 all_rows.append({
-                    'Дата': date_str,
-                    'Время': time_str,
+                    'Дата': date_str + ' ' + time_str,
+                    # 'Время': time_str,
                     'Наименование': item['name'],
                     'Количество': item['quantity'],
                     'Цена за шт': item['price_per_unit'],
                     'Сумма': item['sum'],
-                    'Название письма': subject,
-                    'Письмо от': sender
+                    # 'Название письма': subject,
+                    'Компания': sender
                 })
 
             mark = '✓' if items else '–'
@@ -222,32 +222,20 @@ def main():
         return
 
     df = pd.DataFrame(all_rows)
-
-    if 'Дата' in df.columns and 'Время' in df.columns:
-        df['sort_dt'] = pd.to_datetime(
-            df['Дата'] + ' ' + df['Время'],
-            format='%d.%m.%Y %H:%M',
-            errors='coerce'
-        )
-        df = df.sort_values(['sort_dt'])
-        df = df.drop(columns=['sort_dt'])
-        df = df.reset_index(drop=True)
-
-    final_columns = [
-        'Наименование',
-        'Количество',
-        'Цена за шт',
-        'Сумма',
-        'Название письма'
-    ]
-    existing_cols = [c for c in final_columns if c in df.columns]
-    df_final = df[existing_cols]
+    df['sort_dt'] = pd.to_datetime(
+        df['Дата'],
+        format='%d.%m.%Y %H:%M',
+        errors='coerce'
+    )
+    df = df.sort_values(['sort_dt'])
+    df = df.drop(columns=['sort_dt'])
+    df = df.reset_index(drop=True)
 
     try:
-        df_final.to_excel(EXCEL_FILE, index=False, engine='openpyxl')
+        df.to_excel(EXCEL_FILE, index=False, engine='openpyxl')
         print(f"\nСохранено: {os.path.abspath(EXCEL_FILE)}")
-        print(f"Строк с товарами: {len(df_final)}")
-        print(f"Уникальных чеков: {df['Название письма'].nunique()}")
+        print(f"Строк с товарами: {len(df)}")
+        # print(f"Уникальных чеков: {df['Название письма'].nunique()}")
     except Exception as e:
         print(f"Ошибка сохранения Excel: {e}")
 
