@@ -4,11 +4,10 @@ from email.header import decode_header
 from email.utils import parseaddr
 import re
 from datetime import datetime
-import getpass
 import pandas as pd
 from bs4 import BeautifulSoup
 import os
-from dotenv import load_dotenv, dotenv_values
+from dotenv import load_dotenv
 
 # ────────────────────────────────────────────────
 #          Загрузка настроек из .env
@@ -22,12 +21,8 @@ EXCEL_FILE    = os.getenv('EXCEL_FILE')
 EMAIL_USER = os.getenv('EMAIL_USER')
 EMAIL_KEY = os.getenv('EMAIL_KEY')
 
-# Если хотите брать логин/пароль тоже из .env — раскомментируйте
-# EMAIL_USER = os.getenv('EMAIL_USER')
-# EMAIL_PASS = os.getenv('EMAIL_PASS')
-
 # ────────────────────────────────────────────────
-#          Вспомогательные функции (без изменений)
+#          Вспомогательные функции
 # ────────────────────────────────────────────────
 
 def decode_subject(subject):
@@ -77,14 +72,9 @@ def parse_receipt_items(html_text):
     dt = extract_datetime_from_text(full_text)
 
     items = []
-    # Ищем таблицу с товарами (Courier New / monospace)
-    table = soup.find('table', string=re.compile(r'(Courier New|monospace)', re.I))
-    if not table:
-        table = soup.find('table', attrs={'style': lambda s: s and 'Courier' in s})
-
+    table = soup.find('table')
     if table:
         rows = table.find_all('tr')
-        in_items_section = False
 
         for row in rows:
             tds = row.find_all(['td', 'th'])
@@ -92,37 +82,39 @@ def parse_receipt_items(html_text):
                 continue
             texts = [td.get_text(strip=True) for td in tds]
 
-            if any('№' in t and 'Наименование' in t for t in texts):
-                in_items_section = True
-                continue
-
-            if not in_items_section:
-                continue
-
-            if len(texts) >= 5 and re.match(r'^\d+\.?$', texts[0]):
+            if 'Наименование' in texts:
                 try:
-                    num = int(re.sub(r'[^\d]', '', texts[0]))
-                    name = texts[1]
-                    price_str = texts[2].replace(' ', '').replace(',', '.')
-                    qty_str  = texts[3].replace(' ', '')
-                    sum_str  = texts[4].replace(' ', '').replace(',', '.')
+                    num = 1
+                    index = texts.index(f'{num}.')
+                    while index != -1:
+                        if '.' not in texts[index]:
+                            break
 
-                    price = float(price_str) if price_str.replace('.', '').replace('-','').isdigit() else None
-                    qty   = int(qty_str)   if qty_str.isdigit() else None
-                    total = float(sum_str) if sum_str.replace('.', '').replace('-','').isdigit() else None
+                        name = texts[index + 1]
+                        price_str = texts[index + 2].replace(' ', '').replace(',', '.')
+                        qty_str  = texts[index + 3].replace(' ', '')
+                        sum_str  = texts[index + 4].replace(' ', '').replace(',', '.')
 
-                    if price is not None and qty is not None:
-                        items.append({
-                            'num': num,
-                            'name': name,
-                            'quantity': qty,
-                            'price_per_unit': price,
-                            'sum': total
-                        })
+                        price = float(price_str) if price_str.replace('.', '').replace('-','').isdigit() else None
+                        qty   = int(qty_str)   if qty_str.isdigit() else None
+                        total = float(sum_str) if sum_str.replace('.', '').replace('-','').isdigit() else None
+
+                        if price is not None and qty is not None:
+                            items.append({
+                                'name': name,
+                                'quantity': qty,
+                                'price_per_unit': price,
+                                'sum': total
+                            })
+
+                        num += 1
+                        index = texts.index(f'{num}.')
+
                 except:
-                    pass
+                    break
+                break
 
-    return items, dt, full_text
+    return items, dt
 
 # ────────────────────────────────────────────────
 #                   Основная логика
@@ -131,16 +123,9 @@ def parse_receipt_items(html_text):
 def main():
     print("Парсер электронных чеков от 1-ofd.ru (Яндекс Почта)\n")
 
-    email_user = input("Email (например: example@ya.ru): ").strip() or os.getenv('EMAIL_USER')
-    if not email_user:
-        email_user = input("Email обязателен → ").strip()
-
-    # Пароль: сначала из .env, потом ввод
-    email_pass = os.getenv('EMAIL_PASS') or getpass.getpass("Пароль / App-пароль: ")
-
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(email_user, email_pass)
+        mail.login(EMAIL_USER, EMAIL_KEY)
         mail.select(EMAIL_FOLDER)
         print(f"Подключено → папка {EMAIL_FOLDER}")
     except Exception as e:
@@ -176,14 +161,11 @@ def main():
                 print(f"[{idx:3d}] Нет HTML-части → пропуск")
                 continue
 
-            items, receipt_dt, full_text = parse_receipt_items(html)
+            items, receipt_dt = parse_receipt_items(html)
 
             if not items:
-                soup = BeautifulSoup(html, 'html.parser')
-                text = soup.get_text(separator=' ', strip=True).lower()
-                if 'кассовый чек' not in text and 'чек' not in text:
-                    print(f"[{idx:3d}] Не похоже на чек → пропуск")
-                    continue
+                print(f"[{idx:3d}] Не найдены элементы чека -> пропускаем")
+                continue
 
             date_str = receipt_dt.strftime('%d.%m.%Y') if receipt_dt else ''
             time_str = receipt_dt.strftime('%H:%M')    if receipt_dt else ''
@@ -192,7 +174,6 @@ def main():
                 all_rows.append({
                     'Дата': date_str,
                     'Время': time_str,
-                    '№': item['num'],
                     'Наименование': item['name'],
                     'Количество': item['quantity'],
                     'Цена за шт': item['price_per_unit'],
@@ -217,9 +198,9 @@ def main():
 
     if 'Дата' in df.columns and 'Время' in df.columns:
         df['sort_dt'] = pd.to_datetime(df['Дата'] + ' ' + df['Время'], format='%d.%m.%Y %H:%M', errors='coerce')
-        df = df.sort_values(['sort_dt', '№']).drop(columns=['sort_dt']).reset_index(drop=True)
+        df = df.sort_values(['sort_dt']).drop(columns=['sort_dt']).reset_index(drop=True)
 
-    final_columns = ['№', 'Наименование', 'Количество', 'Цена за шт', 'Сумма', 'Название письма']
+    final_columns = ['Наименование', 'Количество', 'Цена за шт', 'Сумма', 'Название письма']
     existing_cols = [c for c in final_columns if c in df.columns]
     df_final = df[existing_cols]
 
