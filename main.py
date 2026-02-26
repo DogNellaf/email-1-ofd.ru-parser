@@ -95,9 +95,9 @@ def parse_receipt_items(html_text):
                         qty_str  = texts[index + 3].replace(' ', '')
                         sum_str  = texts[index + 4].replace(' ', '').replace(',', '.')
 
-                        price = float(price_str) if price_str.replace('.', '').replace('-','').isdigit() else None
-                        qty   = int(qty_str)   if qty_str.isdigit() else None
-                        total = float(sum_str) if sum_str.replace('.', '').replace('-','').isdigit() else None
+                        price = float(price_str)
+                        qty   = int(qty_str)
+                        total = float(sum_str)
 
                         if price is not None and qty is not None:
                             items.append({
